@@ -1,0 +1,509 @@
+---
+title: "product selection_MFA_040625"
+output: html_document
+date: "2025-04-06"
+---
+
+{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+Note
+
+from mfa_partial_contribution, we can find top 3 contributing PCs, 2 of them are taste and hand texture. Given what we mentioned in abstract, should I intentionally selected high contribution PCs from appearance, flavor, and mouthfeel? We can say from plot MFA by Sensory Modalities, appearance, mouthfeel, flavor are the major contributing sensory modalities, so we will select from these 3 modalities specifically
+
+Data preparation
+
+Library packages
+
+{r}
+library(tidyverse)
+library(here)
+library(readxl)
+library(factoextra)
+library(FactoMineR)
+library(SensoMineR)
+library(readr)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(patchwork)
+library(openxlsx)
+library(stringr)
+library(tidyr)
+library(plotly)
+
+Import and format data
+
+Import data
+
+{r}
+data1 <- read_excel("C:/Users/Linli Zhu/Box/Delarue Lab/Projects/2025/2025_LZ_Bread Taxonomic Sorting/2025_Bread Taxonomic Sorting/Product selection/Sandwich bread data_040824.xlsx", 
+                    sheet = "Sheet2")
+
+Average across repetitions
+
+{r}
+data_mean <- data1 %>%
+  select(-Repetition) %>%
+  group_by(Product) %>%
+  summarise(across(where(is.numeric), mean)) %>%
+  ungroup()
+
+MFA
+
+Format for MFA
+
+{r}
+# average across repetition for each judge
+data_mfa <- data_mean%>%
+  arrange(Product)%>%
+  as.data.frame()%>%
+  column_to_rownames(var = 'Product')
+
+Group by modality
+
+{r}
+group <- c(5,3,5,9,7)
+
+MFA
+
+base MFA
+
+{r}
+# run MFA
+res_mfa <- MFA(data_mfa,
+               group = group,
+               type = rep("s",5),
+               name.group = c("Appearance","Hand Texture","Taste","Flavor","Mouthfeel"),
+               graph = FALSE)
+print(res_mfa)
+
+eigenvalue
+
+{r}
+# eigenvalue
+fviz_screeplot(res_mfa)
+res_mfa$eig # comp 1-3
+
+RV between modalities
+
+{r}
+res_mfa$group$RV
+
+# extract df
+mfa_rv <- res_mfa$group$RV%>%
+  .[-nrow(.),-ncol(.)] # remove MFA column and row for clarity
+
+# rank
+mfa_rv_ranked <- as.data.frame(as.table(mfa_rv))%>%
+  rename(Row = Var1, 
+         Column = Var2, 
+         Value = Freq)%>%
+  filter(Row != Column)%>%  # remove diagonal
+  rowwise()%>%
+  mutate(Pair = paste(sort(c(Row, Column)),
+                      collapse = "-"))%>%
+  ungroup()%>%
+  distinct(Pair, 
+           .keep_all = TRUE)%>%
+  arrange(desc(abs(Value)))%>%
+  mutate(Rank = row_number())%>%
+  select(Pair, Value, Rank)
+mfa_rv_ranked
+
+PC relationship
+
+2D with 3dims
+
+{r}
+res_mfa$partial.axes$contrib
+
+# visualize all modalities
+mfa_PC_12<- fviz_mfa_axes(res_mfa,
+                          axes = c(1,2),
+                          repel = TRUE)
+
+mfa_PC_13<- fviz_mfa_axes(res_mfa,
+                          axes = c(1,3),
+                          repel = TRUE)
+
+mfa_PC_23<- fviz_mfa_axes(res_mfa,
+                          axes = c(2,3),
+                          repel = TRUE)
+
+Explanation from MFA guide for partial.axes: relationship between the principal axes of the MFA and the ones obtained from analyzing each group using either a PCA
+
+3D with 3dims
+
+{r}
+### visualize info from partial axes, is it possible to do it in 3d?
+
+## export coordinates of mfa
+mfa_partial_axes_coord <- res_mfa$partial.axes$coord%>%
+  as.data.frame()%>%
+  rownames_to_column("PC") %>%
+  mutate(Group = gsub("\\..*", "", PC))
+
+## generate line from origin to represent arrows like fviz_mfa_axes()
+arrow_segments <- mfa_partial_axes_coord %>%
+  rowwise() %>%
+  mutate(x0 = 0, y0 = 0, z0 = 0,
+         x1 = Dim.1, y1 = Dim.2, z1 = Dim.3) %>% # generate line with coordinates
+  ungroup()
+
+
+## establish blank plot
+p <- plot_ly()
+
+## add arrows from origin to each partial axis point
+for (i in 1:nrow(arrow_segments)) {
+  p <- add_trace(
+    p,
+    x = c(arrow_segments$x0[i], arrow_segments$x1[i]), 
+    # start from origin x0 set before and end at point x1
+    y = c(arrow_segments$y0[i], arrow_segments$y1[i]),
+    z = c(arrow_segments$z0[i], arrow_segments$z1[i]),
+    type = "scatter3d",
+    mode = "lines+text",
+    line = list(color = "gray", width = 3),
+    text = arrow_segments$PC[i],
+    textposition = "top center",
+    showlegend = FALSE
+  )
+}
+
+## add the points at the arrow tips
+p <- add_trace(
+  p,
+  data = arrow_segments,
+  x = ~x1, y = ~y1, z = ~z1,
+  type = "scatter3d",
+  mode = "markers",
+  color = ~Group,
+  marker = list(size = 4),
+  text = ~PC,
+  showlegend = TRUE
+)
+
+## output 3d plot
+p <- p %>%
+  layout(
+    title = "3D MFA_PCs",
+    scene = list(
+      xaxis = list(title = "Dim 1 (32.2%)"),
+      yaxis = list(title = "Dim 2 (21.6%)"),
+      zaxis = list(title = "Dim 3 (15.7%)")
+    )
+  )
+
+p
+
+PC contribution
+
+{r}
+# find high contribution PCs
+mfa_partial_contribution <- res_mfa$partial.axes$contrib%>%
+  as.data.frame(.)%>%
+  select(Dim.1, Dim.2, Dim.3)%>% # only look at first 3 dims
+  mutate('Sum'=rowSums(across(everything()))) # find highest contribution PCs
+
+view(mfa_partial_contribution)
+
+PC correlation
+
+{r}
+# find highly correlated PCs to high contribution PCs
+mfa_partial_correlation <- res_mfa$partial.axes$cor.between%>%
+  as.data.frame(.) 
+view(mfa_partial_correlation)
+
+Design Dim1
+
+{r}
+# Dim.1.Appearance, Dim.1.Flavor, Dim.1.Mouthfeel
+
+## test each selected PC if they are correlated with PCs in other dimensions
+Dim1_Appearance <- mfa_partial_correlation%>%
+  rownames_to_column("Row")%>%
+  filter(Row == "Dim.1.Appearance")%>%
+  select(-Row)%>%
+  pivot_longer(cols = everything(), 
+               names_to = "PC", 
+               values_to = "Correlation")%>%
+  mutate(AbsCorrelation = abs(Correlation))%>%
+  arrange(desc(AbsCorrelation))
+
+Dim1_Flavor <- mfa_partial_correlation%>%
+  rownames_to_column("Row")%>%
+  filter(Row == "Dim.1.Flavor")%>%
+  select(-Row)%>%
+  pivot_longer(cols = everything(), 
+               names_to = "PC", 
+               values_to = "Correlation")%>%
+  mutate(AbsCorrelation = abs(Correlation))%>%
+  arrange(desc(AbsCorrelation))
+
+Dim1_Mouthfeel <- mfa_partial_correlation%>%
+  rownames_to_column("Row")%>%
+  filter(Row == "Dim.1.Mouthfeel")%>%
+  select(-Row)%>%
+  pivot_longer(cols = everything(), 
+               names_to = "PC", 
+               values_to = "Correlation")%>%
+  mutate(AbsCorrelation = abs(Correlation))%>%
+  arrange(desc(AbsCorrelation))
+
+view(Dim1_Appearance)
+view(Dim1_Flavor)
+view(Dim1_Mouthfeel)
+
+Dim1_Appearance[2:3,1] # 0.7 and 0.4
+Dim1_Flavor[2,1] # 0.7
+Dim1_Flavor[2:8,1] # 0.4
+Dim1_Mouthfeel[2,1,1] # 0.7
+Dim1_Mouthfeel[2:7,1] # 0.4
+
+selected base on intensity and observed density (more PCs align on this axis)imagine there is an axis, what are PCs surrounding these axis?
+
+For Dim.2.Mouthfeel, correlates with Dim.2.Flavor in DD2 (4.073181e-01) and Dim.1.Hand in DD3 (-5.069635e-01)
+
+Design Dim2
+
+{r}
+# Dim.1.Taste,  Dim.2.Flavor, Dim.2.Mouthfeel
+Dim1_Taste <- mfa_partial_correlation%>%
+  rownames_to_column("Row")%>%
+  filter(Row == "Dim.1.Taste")%>%
+  select(-Row)%>%
+  pivot_longer(cols = everything(), 
+               names_to = "PC", 
+               values_to = "Correlation")%>%
+  mutate(AbsCorrelation = abs(Correlation))%>%
+  arrange(desc(AbsCorrelation))
+
+Dim2_Flavor <- mfa_partial_correlation%>%
+  rownames_to_column("Row")%>%
+  filter(Row == "Dim.2.Flavor")%>%
+  select(-Row)%>%
+  pivot_longer(cols = everything(), 
+               names_to = "PC", 
+               values_to = "Correlation")%>%
+  mutate(AbsCorrelation = abs(Correlation))%>%
+  arrange(desc(AbsCorrelation))
+
+Dim2_Mouthfeel <- mfa_partial_correlation%>%
+  rownames_to_column("Row")%>%
+  filter(Row == "Dim.2.Mouthfeel")%>%
+  select(-Row)%>%
+  pivot_longer(cols = everything(), 
+               names_to = "PC", 
+               values_to = "Correlation")%>%
+  mutate(AbsCorrelation = abs(Correlation))%>%
+  arrange(desc(AbsCorrelation))
+
+view(Dim1_Taste)
+view(Dim2_Flavor)
+view(Dim2_Mouthfeel)
+
+Dim1_Taste[2:6,1] # 0.4
+Dim2_Flavor[2,1] # 0.7
+Dim2_Flavor[2:6,1] # 0.4
+Dim2_Mouthfeel[2,1] # 0.7
+Dim2_Mouthfeel[2:6,1] # 0.4
+
+Design Dim3
+
+{r}
+# Dim.1.Hand
+Dim1_Hand <- mfa_partial_correlation%>%
+  rownames_to_column("Row")%>%
+  filter(Row == "Dim.1.Hand Texture")%>%
+  select(-Row)%>%
+  pivot_longer(cols = everything(), 
+               names_to = "PC", 
+               values_to = "Correlation")%>%
+  mutate(AbsCorrelation = abs(Correlation))%>%
+  arrange(desc(AbsCorrelation))
+
+view(Dim1_Hand)
+
+Dim1_Hand[2:4,1] # 0.4
+
+possible correlated PCs that may join this also correlates to other design dimensions, therefore decide to keep it as design dimension with 1 PC only
+
+Check intersection
+
+{r eval=FALSE, include=FALSE}
+# Dim.1.Appearance, Dim.1.Flavor, Dim.1.Mouthfeel
+Dim1_Appearance[2:3,1] # 0.7 and 0.4
+Dim1_Flavor[2,1] # 0.7
+Dim1_Flavor[2:8] # 0.4
+Dim1_Mouthfeel[2,1] # 0.7
+Dim1_Mouthfeel[2:7,1] # 0.4
+
+# Dim.1.Taste,  Dim.2.Flavor, Dim.2.Mouthfeel
+Dim1_Taste[2:6,1] # 0.4
+Dim2_Flavor[2,1] # 0.7
+Dim2_Flavor[2:6,1] # 0.4
+Dim2_Mouthfeel[2,1] # 0.7
+Dim2_Mouthfeel[2:6,1] # 0.4
+
+# Dim.1.Hand
+Dim1_Hand[2:4,1] # 0.4
+
+{r eval=FALSE, include=FALSE}
+# Design dim1: Dim.1.Appearance, Dim.1.Flavor, Dim.1.Mouthfeel
+list_0.7_dd_1 <- c(Dim1_Appearance[1:3,1],
+                   Dim1_Flavor[1:2,1], # 0.7
+                   Dim1_Mouthfeel[1:2,1]) # 0.7
+list_0.4_dd_1 <- c(Dim1_Appearance[1:3,1], # 0.7 and 0.4
+                   Dim1_Flavor[1:2,1], # 0.7
+                   Dim1_Flavor[1:8,1], # 0.4
+                   Dim1_Mouthfeel[1:2,1], # 0.7
+                   Dim1_Mouthfeel[1:7,1]) # 0.4
+
+# Design dim2: Dim.1.Taste,  Dim.2.Flavor, Dim.2.Mouthfeel
+list_0.7_dd_2 <- c(Dim2_Flavor[1:2,1], # 0.7
+                   Dim2_Mouthfeel[1:2,1]) # 0.7
+list_0.4_dd_2 <- c(Dim1_Taste[1:6,1], # 0.4
+                   Dim2_Flavor[1:2,1], # 0.7
+                   Dim2_Flavor[1:6,1], # 0.4
+                   Dim2_Mouthfeel[1:2,1], # 0.7
+                   Dim2_Mouthfeel[1:6,1]) # 0.4
+
+# Design dim3: Dim.1.Hand
+list_0.4_dd_3 <- c(Dim1_Hand[1:4,1]) # 0.4
+
+
+# test DDs (Design Dimensions)
+## DD1
+### 0.7, good
+sapply(list(list_0.7_dd_2), function(x) "Dim.1.Appearance" %in% x)
+sapply(list(list_0.7_dd_2), function(x) "Dim.1.Flavor" %in% x)
+sapply(list(list_0.7_dd_2), function(x) "Dim.1.Mouthfeel" %in% x)
+### 0.4, good
+sapply(list(list_0.4_dd_2, list_0.4_dd_3), function(x) "Dim.1.Appearance" %in% x)
+sapply(list(list_0.4_dd_2, list_0.4_dd_3), function(x) "Dim.1.Flavor" %in% x)
+sapply(list(list_0.4_dd_2, list_0.4_dd_3), function(x) "Dim.1.Mouthfeel" %in% x)
+
+## DD2
+### 0.7, good
+sapply(list(list_0.7_dd_1), function(x) "Dim.1.Taste" %in% x)
+sapply(list(list_0.7_dd_1), function(x) "Dim.2.Flavor" %in% x)
+sapply(list(list_0.7_dd_1), function(x) "Dim.2.Mouthfeel" %in% x)
+### 0.4, good
+sapply(list(list_0.4_dd_1, list_0.4_dd_3), function(x) "Dim.1.Taste" %in% x)
+sapply(list(list_0.4_dd_1, list_0.4_dd_3), function(x) "Dim.2.Flavor" %in% x)
+sapply(list(list_0.4_dd_1, list_0.4_dd_3), function(x) "Dim.2.Mouthfeel" %in% x)
+
+## DD3
+### 0.7
+sapply(list(list_0.7_dd_1, list_0.7_dd_2), function(x) "Dim.1.Hand" %in% x)
+### 0.4
+sapply(list(list_0.4_dd_1, list_0.4_dd_2), function(x) "Dim.1.Hand" %in% x)
+
+No correlation among any PCs selected at level of 0.7
+
+Correlations between PCs selected at level of 0.4:- Dim.2.Mouthfeel and Dim.2.Flavor in DD2 (4.073181e-01)- Dim.2.Mouthfeel and Dim.1.Hand in DD3 (-5.069635e-01)however, the correlation is not too high, probably acceptable here
+
+Conclusion
+
+Design dimension 1: Dim.1.Appearance, Dim.1.Flavor, Dim.1.Mouthfeel Design dim2 Dim.1.Taste, Dim.2.FlavorDim.2.Mouthfeel Design dim3: Dim.1.Hand Design dimension 1: Dim.1.Appearance, Dim.1.Flavor, Dim.1.Mouthfeel Design dimension 2: Dim.1.Taste, Dim.2.Flavor, Dim.2.Mouthfeel Design dimension 3: Dim.1.Hand
+
+Individual contribution
+
+{r}
+# inertia per individual
+res_mfa$ind$within.partial.inertia
+view(res_mfa$ind$within.partial.inertia)
+
+partial inertia def: https://wires.onlinelibrary.wiley.com/doi/full/10.1002/wics.1246?saml_referrer
+
+Format data
+
+{r}
+mfa_ind_contrib <- res_mfa$ind$within.partial.inertia%>%
+  as.data.frame()%>%
+  rownames_to_column("ID") %>% 
+  separate(ID, into = c("Product", "Group"), sep = "\\.") %>%
+  pivot_longer(cols = starts_with("Dim"),    
+               names_to = "Dim",
+               values_to = "Value") %>%
+  mutate(Dim_Group = paste(Dim, Group, sep = ".")) %>%
+  select(Product, Dim_Group, Value) %>%
+  pivot_wider(names_from = Dim_Group, values_from = Value)
+
+view(mfa_ind_contrib)
+
+Selected PC
+
+{r}
+
+
+
+extract other values
+
+{r eval=FALSE, include=FALSE}
+res_mfa$global.pca
+res_mfa$global.pca$var$cor
+
+res_mfa$quanti.var$cor
+
+res_mfa$group # use this for PC info
+
+Visualization
+
+Among modalities
+
+{r}
+# correlation between groups and dimensions
+fviz_mfa_var(res_mfa, 
+             "group",
+             repel = TRUE,
+             title = "MFA by Sensory Modalities")
+res_mfa$group$correlation
+
+# modality contribution to dim1
+fviz_contrib(res_mfa,
+             "group",
+             axes = 1)
+
+# modality contribution to dim2
+fviz_contrib(res_mfa,
+             "group",
+             axes = 2) 
+
+Conclusion
+
+appearance, mouthfeel, flavor are the most correlated sensory modalities
+
+Among attributes
+
+{r}
+# correlation between quantitative variables (attributes) and dimensions
+quanti.var <- get_mfa_var(res_mfa,
+                          "quanti.var") # extract res for quantitative variables
+fviz_mfa_var(res_mfa,
+             geom = c("point","text"), # improve clarity by omitting the arrow
+             repel = TRUE,
+             legend = "bottom",
+             title = "MFA by Attributes")
+fviz_contrib(res_mfa,
+             choice = "quanti.var",
+             axes = 1) # attribute contribution to dim1
+fviz_contrib(res_mfa,
+             choice = "quanti.var",
+             axes = 2) # attribute contribution to dim2
+fviz_cos2(res_mfa,
+          choice = "quanti.var",
+          axes = 1)
+
+Among products
+
+{r}
+# results per product
+fviz_mfa_ind(res_mfa, 
+             repel = TRUE, 
+             col.ind = "cos2",
+             gradient.col = c("#00B0F0", "#FF3030"))
+
